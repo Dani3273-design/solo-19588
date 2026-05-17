@@ -1,6 +1,7 @@
 import threading
 import time
 from typing import Callable
+from collections import deque
 
 
 class Timer:
@@ -63,3 +64,28 @@ class Timer:
         secs = int(seconds % 60)
         ms = int((seconds - int(seconds)) * 100)
         return f'{mins:02d}:{secs:02d}.{ms:02d}'
+
+
+class SubmissionRecord:
+    def __init__(self, max_history: int = 3):
+        self._attempt_count = 0
+        self._history: deque[str] = deque(maxlen=max_history)
+        self._lock = threading.Lock()
+
+    def add_submission(self, expression: str):
+        with self._lock:
+            self._attempt_count += 1
+            self._history.append(expression)
+
+    def get_attempt_count(self) -> int:
+        with self._lock:
+            return self._attempt_count
+
+    def get_recent_submissions(self) -> list[str]:
+        with self._lock:
+            return list(self._history)
+
+    def reset(self):
+        with self._lock:
+            self._attempt_count = 0
+            self._history.clear()

@@ -1,5 +1,6 @@
 import re
 from typing import Tuple, Optional
+from itertools import permutations
 
 ALLOWED_CHARS = set('0123456789+-*/() ')
 
@@ -32,3 +33,45 @@ def validate_expression(expression: str, card_values: list[int]) -> Tuple[bool, 
         return False, '算式语法错误，请检查括号和运算符'
     except Exception as e:
         return False, f'算式错误：{str(e)}'
+
+
+def _find_solution(nums: list[int], exprs: list[str]) -> Optional[str]:
+    if len(nums) == 1:
+        if abs(nums[0] - 24) < 1e-9:
+            return exprs[0]
+        return None
+
+    for i in range(len(nums)):
+        for j in range(len(nums)):
+            if i == j:
+                continue
+            remaining = [nums[k] for k in range(len(nums)) if k != i and k != j]
+            remaining_exprs = [exprs[k] for k in range(len(exprs)) if k != i and k != j]
+            a, b = nums[i], nums[j]
+            expr_a, expr_b = exprs[i], exprs[j]
+
+            ops = [
+                (a + b, f'({expr_a} + {expr_b})'),
+                (a - b, f'({expr_a} - {expr_b})'),
+                (a * b, f'({expr_a} * {expr_b})'),
+            ]
+            if abs(b) > 1e-9:
+                ops.append((a / b, f'({expr_a} / {expr_b})'))
+
+            for val, expr in ops:
+                result = _find_solution(remaining + [val], remaining_exprs + [expr])
+                if result:
+                    return result
+    return None
+
+
+def find_correct_answer(card_values: list[int]) -> Optional[str]:
+    for perm in permutations(range(len(card_values))):
+        nums = [card_values[i] for i in perm]
+        exprs = [str(card_values[i]) for i in perm]
+        result = _find_solution(nums, exprs)
+        if result:
+            if result.startswith('(') and result.endswith(')'):
+                result = result[1:-1]
+            return result
+    return None

@@ -4,8 +4,8 @@ import os
 from typing import Optional
 
 from game.card import Card, draw_unique_cards
-from game.check import validate_expression
-from game.count import Timer
+from game.check import validate_expression, find_correct_answer
+from game.count import Timer, SubmissionRecord
 
 pygame.init()
 
@@ -29,6 +29,7 @@ CARD_BLACK = (0, 0, 0)
 STATE_MENU = 'menu'
 STATE_PLAYING = 'playing'
 STATE_RESULT = 'result'
+STATE_RESULT_FAIL = 'result_fail'
 
 
 def get_font(size: int) -> pygame.font.Font:
@@ -160,14 +161,18 @@ class GameUI:
 
         self.cards: list[Card] = []
         self.timer = Timer()
+        self.submission_record = SubmissionRecord()
         self.input_box = InputBox(200, 420, 500, 55)
         self.error_message: Optional[str] = None
         self.success_expression: str = ''
         self.final_time: float = 0.0
+        self.correct_answer: Optional[str] = None
+        self.is_win: bool = False
 
         self.start_button = Button(WINDOW_WIDTH // 2 - 100, 480, 200, 60, '开始游戏', 32)
-        self.submit_button = Button(WINDOW_WIDTH // 2 - 80, 500, 160, 55, '提交答案', 26)
-        self.back_button = Button(WINDOW_WIDTH // 2 - 80, 500, 160, 55, '返回首页', 26)
+        self.submit_button = Button(WINDOW_WIDTH // 2 - 170, 500, 160, 55, '提交答案', 26)
+        self.give_up_button = Button(WINDOW_WIDTH // 2 + 10, 500, 160, 55, '放弃', 26)
+        self.back_button = Button(WINDOW_WIDTH // 2 - 80, 575, 160, 50, '返回首页', 26)
 
         self._current_time = 0.0
 
@@ -178,10 +183,22 @@ class GameUI:
         self.cards = draw_unique_cards(4)
         self.timer = Timer(self._timer_callback)
         self.timer.start()
+        self.submission_record.reset()
         self.input_box.clear()
         self.error_message = None
+        self.correct_answer = None
+        self.is_win = False
         self.state = STATE_PLAYING
         self._current_time = 0.0
+
+    def give_up(self):
+        self.timer.pause()
+        self.final_time = self.timer.get_elapsed()
+        self.timer.stop()
+        card_values = [card.value for card in self.cards]
+        self.correct_answer = find_correct_answer(card_values)
+        self.is_win = False
+        self.state = STATE_RESULT_FAIL
 
     def submit_answer(self):
         expression = self.input_box.get_text().strip()
@@ -189,14 +206,21 @@ class GameUI:
             self.error_message = '请输入算式'
             return
 
+        from game.check import ALLOWED_CHARS
+        has_illegal = any(char not in ALLOWED_CHARS for char in expression)
+
         card_values = [card.value for card in self.cards]
         is_valid, message = validate_expression(expression, card_values)
+
+        if not has_illegal:
+            self.submission_record.add_submission(expression)
 
         if is_valid:
             self.timer.pause()
             self.final_time = self.timer.get_elapsed()
             self.timer.stop()
             self.success_expression = expression
+            self.is_win = True
             self.state = STATE_RESULT
         else:
             self.error_message = message
@@ -279,48 +303,94 @@ class GameUI:
             self.screen.blit(error_text, error_rect)
 
         self.submit_button.draw(self.screen)
+        self.give_up_button.draw(self.screen)
 
-    def draw_result(self):
-        title_font = get_font(56)
-        content_font = get_font(28)
-        small_font = get_font(24)
-
-        title = title_font.render('🎉 恭喜通关！', True, SUCCESS_COLOR)
-        title_rect = title.get_rect(center=(WINDOW_WIDTH // 2, 80))
-        self.screen.blit(title, title_rect)
-
+    def _draw_result_common(self, title: str, title_color: tuple):
         card_width = 90
         card_height = 135
         spacing = 25
         total_width = card_width * 4 + spacing * 3
         start_x = (WINDOW_WIDTH - total_width) // 2
-        card_y = 160
+        card_y = 110
+
+        title_font = get_font(56)
+        content_font = get_font(28)
+        small_font = get_font(22)
+
+        title_text = title_font.render(title, True, title_color)
+        title_rect = title_text.get_rect(center=(WINDOW_WIDTH // 2, 60))
+        self.screen.blit(title_text, title_rect)
 
         for i, card in enumerate(self.cards):
             x = start_x + i * (card_width + spacing)
             draw_card(self.screen, card, x, card_y, card_width, card_height)
 
-        expr_label = content_font.render('你的算式:', True, TEXT_COLOR)
-        expr_label_rect = expr_label.get_rect(center=(WINDOW_WIDTH // 2, 335))
-        self.screen.blit(expr_label, expr_label_rect)
+        attempt_count = self.submission_record.get_attempt_count()
+        attempt_label = content_font.render(f'尝试次数: {attempt_count}', True, TEXT_COLOR)
+        attempt_rect = attempt_label.get_rect(center=(WINDOW_WIDTH // 2, 270))
+        self.screen.blit(attempt_label, attempt_rect)
 
-        expr_text = content_font.render(f'{self.success_expression} = 24', True, (255, 255, 150))
-        expr_rect = expr_text.get_rect(center=(WINDOW_WIDTH // 2, 375))
-        self.screen.blit(expr_text, expr_rect)
+        recent_submissions = self.submission_record.get_recent_submissions()
+        if recent_submissions:
+            recent_label = small_font.render('最近提交（3为最新提交）:', True, TEXT_COLOR)
+            recent_rect = recent_label.get_rect(center=(WINDOW_WIDTH // 2, 305))
+            self.screen.blit(recent_label, recent_rect)
 
-        time_label = content_font.render('用时:', True, TEXT_COLOR)
-        time_label_rect = time_label.get_rect(center=(WINDOW_WIDTH // 2, 430))
-        self.screen.blit(time_label, time_label_rect)
-
-        time_text = content_font.render(Timer.format_time(self.final_time), True, SUCCESS_COLOR)
-        time_rect = time_text.get_rect(center=(WINDOW_WIDTH // 2, 470))
-        self.screen.blit(time_text, time_rect)
+            for idx, expr in enumerate(recent_submissions):
+                expr_text = small_font.render(f'{idx + 1}. {expr}', True, (220, 220, 220))
+                expr_rect = expr_text.get_rect(center=(WINDOW_WIDTH // 2, 335 + idx * 28))
+                self.screen.blit(expr_text, expr_rect)
 
         self.back_button.draw(self.screen)
 
         hint = small_font.render('按 ESC 退出 | 按返回首页可重新开始游戏', True, (180, 180, 180))
-        hint_rect = hint.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT - 30))
+        hint_rect = hint.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT - 12))
         self.screen.blit(hint, hint_rect)
+
+    def draw_result(self):
+        content_font = get_font(28)
+
+        self._draw_result_common('🎉 恭喜通关！', SUCCESS_COLOR)
+
+        expr_label = content_font.render('你的算式:', True, TEXT_COLOR)
+        expr_label_rect = expr_label.get_rect(center=(WINDOW_WIDTH // 2, 435))
+        self.screen.blit(expr_label, expr_label_rect)
+
+        expr_text = content_font.render(f'{self.success_expression} = 24', True, (255, 255, 150))
+        expr_rect = expr_text.get_rect(center=(WINDOW_WIDTH // 2, 470))
+        self.screen.blit(expr_text, expr_rect)
+
+        time_label = content_font.render('用时:', True, TEXT_COLOR)
+        time_label_rect = time_label.get_rect(center=(WINDOW_WIDTH // 2, 510))
+        self.screen.blit(time_label, time_label_rect)
+
+        time_text = content_font.render(Timer.format_time(self.final_time), True, SUCCESS_COLOR)
+        time_rect = time_text.get_rect(center=(WINDOW_WIDTH // 2, 540))
+        self.screen.blit(time_text, time_rect)
+
+    def draw_result_fail(self):
+        content_font = get_font(28)
+
+        self._draw_result_common('😢 挑战失败', ERROR_COLOR)
+
+        answer_label = content_font.render('正确答案:', True, TEXT_COLOR)
+        answer_label_rect = answer_label.get_rect(center=(WINDOW_WIDTH // 2, 435))
+        self.screen.blit(answer_label, answer_label_rect)
+
+        if self.correct_answer:
+            answer_text = content_font.render(f'{self.correct_answer} = 24', True, (255, 255, 150))
+        else:
+            answer_text = content_font.render('暂无答案', True, (200, 200, 200))
+        answer_rect = answer_text.get_rect(center=(WINDOW_WIDTH // 2, 470))
+        self.screen.blit(answer_text, answer_rect)
+
+        time_label = content_font.render('用时:', True, TEXT_COLOR)
+        time_label_rect = time_label.get_rect(center=(WINDOW_WIDTH // 2, 510))
+        self.screen.blit(time_label, time_label_rect)
+
+        time_text = content_font.render(Timer.format_time(self.final_time), True, ERROR_COLOR)
+        time_rect = time_text.get_rect(center=(WINDOW_WIDTH // 2, 540))
+        self.screen.blit(time_text, time_rect)
 
     def draw(self):
         self.screen.fill(BACKGROUND_COLOR)
@@ -330,6 +400,8 @@ class GameUI:
             self.draw_playing()
         elif self.state == STATE_RESULT:
             self.draw_result()
+        elif self.state == STATE_RESULT_FAIL:
+            self.draw_result_fail()
         pygame.display.flip()
 
     def handle_event(self, event: pygame.event.Event):
@@ -349,9 +421,11 @@ class GameUI:
             self.input_box.handle_event(event)
             if self.submit_button.handle_event(event):
                 self.submit_answer()
+            if self.give_up_button.handle_event(event):
+                self.give_up()
             if event.type == pygame.KEYDOWN and event.key == pygame.K_RETURN:
                 self.submit_answer()
-        elif self.state == STATE_RESULT:
+        elif self.state == STATE_RESULT or self.state == STATE_RESULT_FAIL:
             if self.back_button.handle_event(event):
                 self.go_to_menu()
 
